@@ -1,14 +1,14 @@
 name: greenskeye-sam
 channels:
-  - pytorch
-  - conda-forge
-  - defaults
+  - pytorch
+  - conda-forge
+  - defaults
 dependencies:
-  - python=3.11
-  - pip
-  - numpy
-  - pytorch
-  - torchvision
-  - opencv
-  - pip:
-      - git+https://github.com/facebookresearch/segment-anything.git
+  - python=3.11
+  - pip
+  - numpy
+  - pytorch
+  - torchvision
+  - opencv
+  - pip:
+      - git+https://github.com/facebookresearch/segment-anything.git
