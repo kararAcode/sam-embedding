@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Export SAM image embedding to a NumPy .npy file and metadata.json.
+Export a SAM image embedding and manifest for GreenSkEye.
 
 Usage:
-  python3 sam_embedding.py --input <image-path> --output <path.npy>
-  python3 sam_embedding.py --input img.jpg --output embed.npy --checkpoint sam_vit_h_4b8939.pth
+  python3 sam_embedding.py --input <image-path> --output <output-directory>
+  python3 sam_embedding.py --input img.jpg --output artifacts --checkpoint sam_vit_h_4b8939.pth
 
 Requires:
   torch, torchvision, segment-anything, opencv-python-headless, numpy
@@ -21,9 +21,7 @@ import sys
 from pathlib import Path
 from urllib.request import urlretrieve
 
-import cv2
 import numpy as np
-import torch
 
 SAM_CHECKPOINT_URLS = {
     "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
@@ -48,15 +46,16 @@ def download_checkpoint(model_type: str, checkpoint_path: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Save SAM ViT image embedding as .npy and metadata.json."
-    )
+    import cv2
+    import torch
+
+    parser = argparse.ArgumentParser(description="Export GreenSkEye SAM artifacts.")
     parser.add_argument("--input", required=True, type=Path, help="Input image path")
     parser.add_argument(
         "--output",
         required=True,
         type=Path,
-        help="Output path (.npy); .npy is appended if missing",
+        help="Directory for manifest.json and embedding.bin",
     )
     parser.add_argument(
         "--checkpoint",
@@ -79,7 +78,7 @@ def main() -> None:
     if not args.checkpoint.is_file():
         try:
             download_checkpoint(args.model_type, args.checkpoint)
-        except Exception as e:
+        except (OSError, ValueError) as e:
             print(f"Failed to download checkpoint: {e}", file=sys.stderr)
             sys.exit(1)
 
@@ -92,10 +91,6 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
-
-    out_path = args.output
-    if out_path.suffix.lower() != ".npy":
-        out_path = out_path.with_suffix(".npy")
 
     bgr = cv2.imread(str(args.input))
     if bgr is None:
@@ -117,27 +112,52 @@ def main() -> None:
         emb = predictor.get_image_embedding()
         arr = emb.detach().cpu().to(torch.float32).numpy()
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    np.save(str(out_path), arr)
-
-    metadata = {
-        "modelType": args.model_type,
-        "checkpoint": args.checkpoint.name,
-        "device": str(device),
-        "embeddingFile": out_path.name,
-        "embeddingShape": list(arr.shape),
-        "embeddingDtype": str(arr.dtype),
-        "originalSize": list(predictor.original_size),
-        "inputSize": list(predictor.input_size),
-    }
-
-    metadata_path = out_path.with_name("metadata.json")
-    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    manifest_path, embedding_path = write_artifacts(
+        args.output,
+        arr,
+        model_type=args.model_type,
+        checkpoint=args.checkpoint.name,
+        original_size=predictor.original_size,
+        input_size=predictor.input_size,
+    )
 
     print(
-        f"Saved embedding shape={arr.shape} dtype={arr.dtype} -> {out_path}\n"
-        f"Saved metadata -> {metadata_path}"
+        f"Saved embedding shape={arr.shape} dtype=float32 -> {embedding_path}\n"
+        f"Saved manifest -> {manifest_path}"
     )
+
+
+def write_artifacts(
+    output_dir: Path,
+    embedding: np.ndarray,
+    *,
+    model_type: str,
+    checkpoint: str,
+    original_size: tuple[int, int],
+    input_size: tuple[int, int],
+) -> tuple[Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    embedding_path = output_dir / "embedding.bin"
+    embedding = np.ascontiguousarray(embedding, dtype="<f4")
+    embedding_path.write_bytes(embedding.tobytes())
+
+    original_height, original_width = original_size
+    input_height, input_width = input_size
+    manifest = {
+        "imageSize": {"width": original_width, "height": original_height},
+        "embedding": embedding_path.name,
+        "embeddingShape": list(embedding.shape),
+        "embeddingDtype": "float32",
+        "modelType": model_type,
+        "checkpoint": checkpoint,
+        "inputSize": {"width": input_width, "height": input_height},
+    }
+
+    manifest_path = output_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    return manifest_path, embedding_path
 
 
 if __name__ == "__main__":
